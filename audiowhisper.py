@@ -31,13 +31,15 @@ def secondtotime(time):
 
 
 def wis(filename):
-    model = whisper.load_model("large-v2", device="cpu")  # large, medium
-    _ = model.half()
-    _ = model.cuda()
+    model = whisper.load_model(
+        "small"
+    )  # , device="cpu")  # large-2, large, medium, small, base, tiny
+    # _ = model.half()
+    # _ = model.cuda()
 
-    for m in model.modules():
-        if isinstance(m, whisper.model.LayerNorm):
-            m.float()
+    # for m in model.modules():
+    #     if isinstance(m, whisper.model.LayerNorm):
+    #         m.float()
 
     print(filename)
     with torch.no_grad():
@@ -45,13 +47,13 @@ def wis(filename):
             f"{filename}",
             verbose=True,
             language="japanese",
-            # beam_size=5,
+            beam_size=4,
             # fp16=True,
             # without_timestamps=False
         )
 
-    with open(f"{filename}.json", "w", encoding="UTF-8") as f:
-        json.dump(result, f, indent=4, ensure_ascii=False)
+    # with open(f"{filename}.json", "w", encoding="UTF-8") as f:
+    #     json.dump(result, f, indent=4, ensure_ascii=False)
 
     with open(f"{filename}.time.txt", "w", encoding="UTF-8") as f:
         count = 0
@@ -96,7 +98,6 @@ def wis(filename):
                 json.dumps(s["text"], ensure_ascii=False).replace('"', "") + "。"
             )
         f.write(document)
-        summarization(filename, document)
 
 
 def summarization(filename, document):
@@ -161,15 +162,13 @@ def main(files):
 
 def summarize(files):
     for file in files:
-        with open(f"{file}", encoding="UTF-8") as f:
+        with open(f"{file}.txt", encoding="UTF-8") as f:
             summarization(file, f.readline().replace(" ", ""))
 
 
 if __name__ == "__main__":
     files = [
-        "./日本人の教養-4-前半.mp4",
-        # "./日本人の教養-4-後半-1.mp4",
-        # "./日本人の教養-4-後半-2.mp4",
+        "./物理学概論3.mp4",
     ]
     main(files)
-    # summarize(files)
+    summarize(files)
