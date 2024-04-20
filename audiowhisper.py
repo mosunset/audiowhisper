@@ -1,7 +1,3 @@
-# ffmpeg -i input.mp4 -f mp3 -vn output.mp3
-# ffmpeg -i ../○○.mp4 -filter:v fps=fps=0.1:round=down -vcodec png
-# image_%04d.png
-
 import whisper
 import torch
 import json
@@ -18,6 +14,9 @@ import MeCab
 
 
 def secondtotime(time):
+    """
+    秒数を時分秒.ミリ秒の形式に変換する関数
+    """
     time = round(time, 1)
     h = int(time // 3600)
     m = int((time - (3600 * h)) // 60)
@@ -31,6 +30,9 @@ def secondtotime(time):
 
 
 def wis(filename):
+    """
+    Whisperモデルを使って音声ファイルを認識し、結果をファイルに出力する関数
+    """
     model = whisper.load_model(
         "small"
     )  # , device="cpu")  # large-2, large, medium, small, base, tiny
@@ -101,6 +103,9 @@ def wis(filename):
 
 
 def summarization(filename, document):
+    """
+    入力文書を要約し、結果をファイルに出力する関数
+    """
     print("summarization")
     similarity_limit = 0.65
     # 自動要約のオブジェクト
@@ -156,11 +161,17 @@ def summarization(filename, document):
 
 
 def main(files):
+    """
+    メイン関数
+    """
     for file in files:
         wis(file)
 
 
 def summarize(files):
+    """
+    要約処理を行う関数
+    """
     for file in files:
         with open(f"{file}.txt", encoding="UTF-8") as f:
             summarization(file, f.readline().replace(" ", ""))
