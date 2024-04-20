@@ -168,7 +168,7 @@ def summarize(files):
 
 if __name__ == "__main__":
     files = [
-        "./物理学概論3.mp4",
+        "./物理学概論4.mp4",
     ]
     main(files)
     summarize(files)
