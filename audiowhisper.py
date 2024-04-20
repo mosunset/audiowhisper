@@ -35,7 +35,7 @@ def wis(filename):
     """
     model = whisper.load_model(
         "small"
-    )  # , device="cpu")  # large-2, large, medium, small, base, tiny
+    )  # , device="cpu")  # large-3, large-2, large, medium, small, base, tiny
     # _ = model.half()
     # _ = model.cuda()
 
