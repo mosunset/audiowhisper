@@ -1,16 +1,10 @@
+#!/usr/bin/env python
 import whisper
 import torch
 import json
 import re
-
-# 自動要約
-from pysummarization.nlpbase.auto_abstractor import AutoAbstractor
-from pysummarization.tokenizabledoc.mecab_tokenizer import MeCabTokenizer
-from pysummarization.abstractabledoc.top_n_rank_abstractor import TopNRankAbstractor
-from pysummarization.nlp_base import NlpBase
-from pysummarization.similarityfilter.tfidf_cosine import TfIdfCosine
-from pysummarization.tokenizabledoc.simple_tokenizer import SimpleTokenizer
-import MeCab
+import argparse
+import os
 
 
 def secondtotime(time):
@@ -29,157 +23,171 @@ def secondtotime(time):
     return f"{sh}:{sm}:{ss}.{mm}"
 
 
-def wis(filename):
+def transcribe_file(filename, beam_size=5, model_name="turbo", output_mask=7):
     """
-    Whisperモデルを使って音声ファイルを認識し、結果をファイルに出力する関数
+    Whisperモデルを使って音声ファイルを認識し、結果を複数のファイルに出力する関数
+
+    出力ファイル:
+      - <filename>.time.txt : タイムスタンプ付きテキスト
+      - <filename>.srt      : SRT形式字幕ファイル
+      - <filename>.txt      : 全文テキスト
     """
+    print(f"Transcribing: {filename} --beam_size {beam_size} --model {model_name}")
+
+    # Whisperモデルの読み込み
+    # whisper.load_model(モデルサイズ, device=デバイス) を使って指定したサイズのモデルを読み込みます。
+    # | モデルサイズ | パラメータ数 | 必要 VRAM | 相対速度 |
+    # | tiny       | 39M        | ~1GB     | ~10x    |
+    # | base       | 74M        | ~1GB     | ~7x     |
+    # | small      | 244M       | ~2GB     | ~4x     |
+    # | medium     | 769M       | ~5GB     | ~2x     |
+    # | large      | 1550M      | ~10GB    | 1x      | "large-v3", "large-v2"
+    # | turbo      | 809M       | ~6GB     | ~8x     |
+
     model = whisper.load_model(
-        "small"
-    )  # , device="cpu")  # large-3, large-2, large, medium, small, base, tiny
-    # _ = model.half()
-    # _ = model.cuda()
+        model_name, device="cpu"
+    )  # CPU上で "small" サイズのモデルを読み込み
 
-    # for m in model.modules():
-    #     if isinstance(m, whisper.model.LayerNorm):
-    #         m.float()
+    # モデルのパラメータを半精度 (float16) に変換
+    # → GPUでの推論時に計算速度とメモリ使用効率が向上する可能性があります。
+    _ = model.half()
 
-    print(filename)
+    # モデルをGPUに移動
+    # → GPUが利用可能な場合、計算速度が大幅に向上します。
+    _ = model.cuda()
+
+    # ※ 注意：LayerNorm レイヤーは半精度では数値精度が低下しやすいため、float32に戻します。
+    # モデル内の全モジュールを走査し、LayerNorm のインスタンスであれば精度を float32 に設定。
+    for m in model.modules():
+        if isinstance(m, whisper.model.LayerNorm):
+            m.float()
+
+    # 勾配計算を無効化（推論時は不要なため、メモリ使用量と計算コストを削減）
     with torch.no_grad():
+        # 音声認識（文字起こし）を実行
         result = model.transcribe(
-            f"{filename}",
-            verbose=True,
-            language="japanese",
-            beam_size=4,
-            # fp16=True,
-            # without_timestamps=False
+            filename,  # ★ filename: 認識対象の音声ファイルのパスまたはオーディオデータを指定します。
+            verbose=True,  # ★ verbose: Trueの場合、認識処理の詳細なログ（進行状況や内部情報）を出力します。
+            language="japanese",  # ★ language: 音声の言語を指定します。ここでは "japanese" と明示して、言語判定の負荷を軽減し認識精度向上を狙います。
+            beam_size=beam_size,  # ★ beam_size: ビームサーチのビーム幅を指定します。
+            #     ビーム幅が大きいほど、複数の候補を同時に検討してより最適な結果を得やすくなりますが、計算負荷も増加します。
+            # 以下はコメントアウトされていますが、必要に応じて利用可能な引数です:
+            # fp16=False,         # ★ fp16: 半精度 (float16) での計算を有効にするかどうかを指定します。
+            #     デフォルトではGPU環境での高速化のためにTrueとなることが多いですが、環境や精度との兼ね合いで変更可能です。
+            # without_timestamps=False  # ★ without_timestamps: Falseの場合、認識結果にタイムスタンプ情報が含まれます。
+            #     Trueにするとタイムスタンプを除外した結果となります。
         )
 
-    # with open(f"{filename}.json", "w", encoding="UTF-8") as f:
-    #     json.dump(result, f, indent=4, ensure_ascii=False)
+    # 出力先フォルダを作成
+    folder_name = os.path.splitext(filename)[0]
+    os.makedirs(folder_name, exist_ok=True)
 
-    with open(f"{filename}.time.txt", "w", encoding="UTF-8") as f:
-        count = 0
-        temp = -1
-        for s in result["segments"]:
-            count += 1
-            if temp == re.sub(r"\..$", "", secondtotime(s["start"])):
-                f.write("\n")
-            else:
-                f.write(
-                    ("" if count == 1 else "\n\n")
-                    + re.sub(r"\..$", "", secondtotime(s["start"]))
-                    + " "
-                    + str(count)
-                    + "\n"
+    # <filename>.time.txt : タイムスタンプ付きテキスト
+    if output_mask & 1:
+        time_txt_filename = os.path.join(
+            folder_name, f"{os.path.basename(filename)}.time.txt"
+        )
+        with open(time_txt_filename, "w", encoding="UTF-8") as f:
+            count = 0
+            temp = -1
+            for s in result["segments"]:
+                count += 1
+                start_formatted = re.sub(r"\..$", "", secondtotime(s["start"]))
+                end_formatted = re.sub(r"\..$", "", secondtotime(s["end"]))
+                if temp == start_formatted:
+                    f.write("\n")
+                else:
+                    f.write(
+                        ("" if count == 1 else "\n\n")
+                        + start_formatted
+                        + " "
+                        + str(count)
+                        + "\n"
+                    )
+                temp = end_formatted
+                f.write(json.dumps(s["text"], ensure_ascii=False).replace('"', ""))
+        print(f"Created {time_txt_filename}")
+
+    # <filename>.srt      : SRT形式字幕ファイル
+    if output_mask & 2:
+        srt_filename = os.path.join(folder_name, f"{os.path.basename(filename)}.srt")
+        with open(srt_filename, "w", encoding="UTF-8") as f:
+            count = 0
+            for s in result["segments"]:
+                count += 1
+                replaced_text3 = json.dumps(s["text"], ensure_ascii=False).replace(
+                    '"', ""
                 )
+                f.write(
+                    f"{count}\n"
+                    f"{secondtotime(s['start'])} --> {secondtotime(s['end'])}\n"
+                    f"{replaced_text3}\n\n"
+                )
+        print(f"Created {srt_filename}")
 
-            temp = re.sub(r"\..$", "", secondtotime(s["end"]))
-            f.write(json.dumps(s["text"], ensure_ascii=False).replace('"', ""))
-
-    with open(f"{filename}.srt", "w", encoding="UTF-8") as f:
-        count = 0
-        for s in result["segments"]:
-            count += 1
-            f.write(
-                str(count)
-                + "\n"
-                + secondtotime(s["start"])
-                + " --> "
-                + secondtotime(s["end"])
-                + "\n"
-                + json.dumps(s["text"], ensure_ascii=False).replace('"', "")
-                + "\n\n"
-            )
-
-    with open(f"{filename}.txt", "w", encoding="UTF-8") as f:
-        count = 0
-        temp = -1
+    # <filename>.txt      : 全文テキスト
+    if output_mask & 4:
+        txt_filename = os.path.join(folder_name, f"{os.path.basename(filename)}.txt")
         document = ""
         for s in result["segments"]:
             document += (
                 json.dumps(s["text"], ensure_ascii=False).replace('"', "") + "。"
             )
-        f.write(document)
+        with open(txt_filename, "w", encoding="UTF-8") as f:
+            f.write(document)
+        print(f"Created {txt_filename}")
 
 
-def summarization(filename, document):
-    """
-    入力文書を要約し、結果をファイルに出力する関数
-    """
-    print("summarization")
-    similarity_limit = 0.65
-    # 自動要約のオブジェクト
-    auto_abstractor = AutoAbstractor()
-    # トークナイザー設定（MeCab使用）
-    auto_abstractor.tokenizable_doc = MeCabTokenizer()
-    # 区切り文字設定
-    auto_abstractor.delimiter_list = ["。", "\n"]
-    # 抽象化&フィルタリングオブジェクト
-    abstractable_doc = TopNRankAbstractor()
-    # 文書要約
-    result_dict1 = auto_abstractor.summarize(document, abstractable_doc)
-
-    print(f"summarize_result")
-    with open(f"{filename}.summarize.txt", "w", encoding="UTF-8") as f:
-        # f.write("[要約結果]")
-        for sentence in result_dict1["summarize_result"]:
-            f.write(sentence)
-        f.write("\n\n")
-        f.write(json.dumps(result_dict1, ensure_ascii=False))
-
-    # NLPオブジェクト
-    nlp_base = NlpBase()
-    # トークナイザー設定（MeCab使用）
-    nlp_base.tokenizable_doc = MeCabTokenizer()
-    # 類似性フィルター
-    similarity_filter = TfIdfCosine()
-    # NLPオブジェクト設定
-    similarity_filter.nlp_base = nlp_base
-    # 類似性limit：limit超える文は切り捨て
-    similarity_filter.similarity_limit = similarity_limit
-
-    # 自動要約のオブジェクト
-    auto_abstractor = AutoAbstractor()
-    # トークナイザー設定（MeCab使用）
-    auto_abstractor.tokenizable_doc = MeCabTokenizer()
-    # 区切り文字設定
-    auto_abstractor.delimiter_list = ["。", "\n"]
-    # 抽象化&フィルタリングオブジェクト
-    abstractable_doc = TopNRankAbstractor()
-    # 文書要約（similarity_filter機能追加）
-    result_dict2 = auto_abstractor.summarize(
-        document, abstractable_doc, similarity_filter
+def main():
+    parser = argparse.ArgumentParser(
+        description="Whisperによる文字起こしを行うツール",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
+    parser.add_argument(
+        "-i",
+        "--input",
+        nargs="+",
+        required=True,
+        help="入力ファイルのパス。複数指定可能。",
+    )
+    parser.add_argument(
+        "--beam_size",
+        type=int,
+        default=5,
+        help="文字起こし時のbeam size",
+    )
+    parser.add_argument(
+        "-m",
+        "--model",
+        default="turbo",
+        help="Whisperモデルのサイズ (tiny, base, small, medium, large, turbo)",
+    )
+    parser.add_argument(
+        "--output_mask",
+        type=int,
+        default=7,
+        help="出力ファイルのマスク (0～7)。1=<filename>.time.txt : タイムスタンプ付きテキスト, 2=<filename>.srt : SRT形式字幕ファイル, 4=<filename>.txt : 全文テキスト の組み合わせ",
+    )
+    parser.add_argument(
+        "--shutdown",
+        action="store_true",
+        help="処理終了後にシャットダウンする",
+    )
+    args = parser.parse_args()
 
-    print("summarize_result2")
-    with open(f"{filename}.summarize_sf.txt", "w", encoding="UTF-8") as f:
-        # f.write("[要約結果：Similarity Filter機能]")
-        for sentence in result_dict2["summarize_result"]:
-            f.write(sentence)
-        f.write("\n\n")
-        f.write(json.dumps(result_dict2, ensure_ascii=False))
+    for file in args.input:
+        transcribe_file(
+            file,
+            beam_size=args.beam_size,
+            model_name=args.model,
+            output_mask=args.output_mask,
+        )
 
-
-def main(files):
-    """
-    メイン関数
-    """
-    for file in files:
-        wis(file)
-
-
-def summarize(files):
-    """
-    要約処理を行う関数
-    """
-    for file in files:
-        with open(f"{file}.txt", encoding="UTF-8") as f:
-            summarization(file, f.readline().replace(" ", ""))
+    if args.shutdown:
+        print("10秒後にシャットダウンします")
+        os.system("timeout 10")
+        os.system("shutdown -s -t 0")
 
 
 if __name__ == "__main__":
-    files = [
-        "./物理学概論4.mp4",
-    ]
-    main(files)
-    summarize(files)
+    main()
