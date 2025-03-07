@@ -9,7 +9,7 @@ import os
 
 def secondtotime(time):
     """
-    秒数を時分秒.ミリ秒の形式に変換する関数
+    指定された秒数を「時:分:秒.ミリ秒」の形式に変換する関数
     """
     time = round(time, 1)
     h = int(time // 3600)
@@ -23,70 +23,128 @@ def secondtotime(time):
     return f"{sh}:{sm}:{ss}.{mm}"
 
 
-def transcribe_file(filename, beam_size=5, model_name="turbo", output_mask=7):
+def transcribe_file(filename, beam_size=5, model_name="turbo", output_mask=7, high_quality=False):
     """
-    Whisperモデルを使って音声ファイルを認識し、結果を複数のファイルに出力する関数
+    Whisperモデルを使用して音声ファイルを文字起こしし、複数のファイルに出力する関数。
 
     出力ファイル:
       - <filename>.time.txt : タイムスタンプ付きテキスト
-      - <filename>.srt      : SRT形式字幕ファイル
+      - <filename>.srt      : SRT形式の字幕ファイル
       - <filename>.txt      : 全文テキスト
     """
-    print(f"Transcribing: {filename} --beam_size {beam_size} --model {model_name}")
+    quality_str = " (高精度モード)" if high_quality else ""
 
-    # Whisperモデルの読み込み
-    # whisper.load_model(モデルサイズ, device=デバイス) を使って指定したサイズのモデルを読み込みます。
-    # | モデルサイズ | パラメータ数 | 必要 VRAM | 相対速度 |
-    # | tiny       | 39M        | ~1GB     | ~10x    |
-    # | base       | 74M        | ~1GB     | ~7x     |
-    # | small      | 244M       | ~2GB     | ~4x     |
-    # | medium     | 769M       | ~5GB     | ~2x     |
-    # | large      | 1550M      | ~10GB    | 1x      | "large-v3", "large-v2"
-    # | turbo      | 809M       | ~6GB     | ~8x     |
+    # 高精度モードが有効な場合、モデル名およびビームサイズを調整
+    if high_quality:
+        if model_name == "turbo":
+            model_name = "large"
+        beam_size = max(beam_size, 6)
 
-    model = whisper.load_model(
-        model_name, device="cpu"
-    )  # CPU上で "small" サイズのモデルを読み込み
+    print(f"Transcribing: {filename} --beam_size {beam_size} --model {model_name}{quality_str}")
 
-    # モデルのパラメータを半精度 (float16) に変換
-    # → GPUでの推論時に計算速度とメモリ使用効率が向上する可能性があります。
+    # Whisperモデルを読み込む
+    # whisper.load_model(モデルサイズ, device=デバイス)
+    # | モデルサイズ | パラメータ数  | 必要VRAM  | 相対速度  |
+    # | tiny        | 39M         | ~1GB     | ~10x     |
+    # | base        | 74M         | ~1GB     | ~7x      |
+    # | small       | 244M        | ~2GB     | ~4x      |
+    # | medium      | 769M        | ~5GB     | ~2x      |
+    # | large       | 1550M       | ~10GB    | 1x       |
+    # | turbo       | 809M        | ~6GB     | ~8x      |
+    model = whisper.load_model(model_name, device="cpu")
+
+    # モデルのパラメータを半精度へ変換する（GPU推論時に性能向上が見込まれる）
     _ = model.half()
 
-    # モデルをGPUに移動
-    # → GPUが利用可能な場合、計算速度が大幅に向上します。
+    # モデルをGPUに移動（GPUが使用可能なら推論速度が大幅に上昇）
     _ = model.cuda()
 
-    # ※ 注意：LayerNorm レイヤーは半精度では数値精度が低下しやすいため、float32に戻します。
-    # モデル内の全モジュールを走査し、LayerNorm のインスタンスであれば精度を float32 に設定。
+    # LayerNormレイヤーはfloat16で精度が下がりやすいため、float32に戻す
     for m in model.modules():
         if isinstance(m, whisper.model.LayerNorm):
             m.float()
 
-    # 勾配計算を無効化（推論時は不要なため、メモリ使用量と計算コストを削減）
-    with torch.no_grad():
-        # 音声認識（文字起こし）を実行
-        result = model.transcribe(
-            filename,  # ★ filename: 認識対象の音声ファイルのパスまたはオーディオデータを指定します。
-            verbose=True,  # ★ verbose: Trueの場合、認識処理の詳細なログ（進行状況や内部情報）を出力します。
-            language="japanese",  # ★ language: 音声の言語を指定します。ここでは "japanese" と明示して、言語判定の負荷を軽減し認識精度向上を狙います。
-            beam_size=beam_size,  # ★ beam_size: ビームサーチのビーム幅を指定します。
-            #     ビーム幅が大きいほど、複数の候補を同時に検討してより最適な結果を得やすくなりますが、計算負荷も増加します。
-            # 以下はコメントアウトされていますが、必要に応じて利用可能な引数です:
-            # fp16=False,         # ★ fp16: 半精度 (float16) での計算を有効にするかどうかを指定します。
-            #     デフォルトではGPU環境での高速化のためにTrueとなることが多いですが、環境や精度との兼ね合いで変更可能です。
-            # without_timestamps=False  # ★ without_timestamps: Falseの場合、認識結果にタイムスタンプ情報が含まれます。
-            #     Trueにするとタイムスタンプを除外した結果となります。
-        )
+    # ここから音声ファイルの文字起こし設定説明（日本語翻訳）
+    #
+    # model : Whisper
+    #   Whisperモデルのインスタンス
+    #
+    # audio : Union[str, np.ndarray, torch.Tensor]
+    #   音声ファイルパス、または音声波形データ
+    #
+    # verbose : bool
+    #   Trueの場合は詳細なログを表示、Falseは簡易ログ、Noneは出力なし
+    #
+    # temperature : Union[float, Tuple[float, ...]]
+    #   サンプリング時の温度。複数指定の場合、それぞれのしきい値を超えた際に段階的に適用される
+    #
+    # compression_ratio_threshold : float
+    #   この値を超えるgzip圧縮率になった場合は失敗とみなす
+    #
+    # logprob_threshold : float
+    #   平均対数確率がこの値を下回った場合は失敗とみなす
+    #
+    # no_speech_threshold : float
+    #   no_speechの確率がこの値を上回り、かつ平均対数確率が閾値を下回っている場合、
+    #   セグメントを無音とみなす
+    #
+    # condition_on_previous_text : bool
+    #   Trueのとき、前のセグメントの推定を次のセグメントの推定に反映する
+    #
+    # word_timestamps : bool
+    #   単語レベルのタイムスタンプを取得し、各セグメントに含める
+    #
+    # prepend_punctuations : str
+    #   word_timestampsがTrueの場合、指定した句読点を次の単語に結合
+    #
+    # append_punctuations : str
+    #   word_timestampsがTrueの場合、指定した句読点を前の単語に結合
+    #
+    # initial_prompt : Optional[str]
+    #   最初のセグメントに与えるテキスト。固有名詞等の補助として使用
+    #
+    # carry_initial_prompt : bool
+    #   Trueの場合、initial_promptを各内部decode()呼び出しに持ち越す
+    #   スペースが足りない場合は先頭が切り捨てられる
+    #
+    # decode_options : dict
+    #   DecodingOptionsインスタンスの生成に使用されるキーワード引数
+    #
+    # clip_timestamps : Union[str, List[float]]
+    #   秒単位の開始と終了のタイムスタンプをカンマ区切りで指定。最後の終了時刻はデフォルトでファイル終端
+    #
+    # hallucination_silence_threshold : Optional[float]
+    #   word_timestampsがTrueのとき、誤判定（幻覚）を避けるため特定秒数以上の無音区間を処理から除外
+    #
+    # 戻り値:
+    #   結果のテキスト("text")、セグメント単位の詳細("segments")、自動検出された言語("language")を含む辞書
+    #
+    transcribe_options = {
+        "verbose": True,
+        "language": "japanese",
+        "beam_size": beam_size,
+    }
 
-    # 出力先フォルダを作成
+    # 高精度モードの場合、追加パラメータを設定
+    if high_quality:
+        transcribe_options.update({
+            "condition_on_previous_text": True,
+            "temperature": 0,
+            "compression_ratio_threshold": 2.4,
+            "no_speech_threshold": 0.6,
+        })
+
+    # 推論時は勾配計算を無効化してメモリ使用量・計算量を削減
+    with torch.no_grad():
+        result = model.transcribe(filename, **transcribe_options)
+
+    # 出力用のフォルダを作成
     folder_name = os.path.splitext(filename)[0]
     os.makedirs(folder_name, exist_ok=True)
 
-    # <filename>.time.txt : タイムスタンプ付きテキスト
+    # <filename>.time.txt（タイムスタンプ付きテキスト出力）
     if output_mask & 1:
-        time_txt_filename = os.path.join(
-            folder_name, f"{os.path.basename(filename)}.time.txt"
-        )
+        time_txt_filename = os.path.join(folder_name, f"{os.path.basename(filename)}.time.txt")
         with open(time_txt_filename, "w", encoding="UTF-8") as f:
             count = 0
             temp = -1
@@ -97,27 +155,19 @@ def transcribe_file(filename, beam_size=5, model_name="turbo", output_mask=7):
                 if temp == start_formatted:
                     f.write("\n")
                 else:
-                    f.write(
-                        ("" if count == 1 else "\n\n")
-                        + start_formatted
-                        + " "
-                        + str(count)
-                        + "\n"
-                    )
+                    f.write(("" if count == 1 else "\n\n") + start_formatted + " " + str(count) + "\n")
                 temp = end_formatted
                 f.write(json.dumps(s["text"], ensure_ascii=False).replace('"', ""))
         print(f"Created {time_txt_filename}")
 
-    # <filename>.srt      : SRT形式字幕ファイル
+    # <filename>.srt（SRT形式字幕ファイル）
     if output_mask & 2:
         srt_filename = os.path.join(folder_name, f"{os.path.basename(filename)}.srt")
         with open(srt_filename, "w", encoding="UTF-8") as f:
             count = 0
             for s in result["segments"]:
                 count += 1
-                replaced_text3 = json.dumps(s["text"], ensure_ascii=False).replace(
-                    '"', ""
-                )
+                replaced_text3 = json.dumps(s["text"], ensure_ascii=False).replace('"', "")
                 f.write(
                     f"{count}\n"
                     f"{secondtotime(s['start'])} --> {secondtotime(s['end'])}\n"
@@ -125,14 +175,12 @@ def transcribe_file(filename, beam_size=5, model_name="turbo", output_mask=7):
                 )
         print(f"Created {srt_filename}")
 
-    # <filename>.txt      : 全文テキスト
+    # <filename>.txt（全文テキスト）
     if output_mask & 4:
         txt_filename = os.path.join(folder_name, f"{os.path.basename(filename)}.txt")
         document = ""
         for s in result["segments"]:
-            document += (
-                json.dumps(s["text"], ensure_ascii=False).replace('"', "") + "。"
-            )
+            document += (json.dumps(s["text"], ensure_ascii=False).replace('"', "") + "。")
         with open(txt_filename, "w", encoding="UTF-8") as f:
             f.write(document)
         print(f"Created {txt_filename}")
@@ -148,30 +196,35 @@ def main():
         "--input",
         nargs="+",
         required=True,
-        help="入力ファイルのパス。複数指定可能。",
+        help="入力する音声ファイルのパス。複数指定可。",
     )
     parser.add_argument(
         "--beam_size",
         type=int,
         default=5,
-        help="文字起こし時のbeam size",
+        help="文字起こし時のビームサイズ",
     )
     parser.add_argument(
         "-m",
         "--model",
         default="turbo",
-        help="Whisperモデルのサイズ (tiny, base, small, medium, large, turbo)",
+        help="Whisperモデルのサイズ (tiny, base, small, medium, large, turbo など)",
     )
     parser.add_argument(
         "--output_mask",
         type=int,
         default=7,
-        help="出力ファイルのマスク (0～7)。1=<filename>.time.txt : タイムスタンプ付きテキスト, 2=<filename>.srt : SRT形式字幕ファイル, 4=<filename>.txt : 全文テキスト の組み合わせ",
+        help="出力ファイルのマスク。1=<filename>.time.txt, 2=<filename>.srt, 4=<filename>.txt の組合せ",
     )
     parser.add_argument(
         "--shutdown",
         action="store_true",
-        help="処理終了後にシャットダウンする",
+        help="処理終了後にシャットダウンするかどうか",
+    )
+    parser.add_argument(
+        "--high_quality",
+        action="store_true",
+        help="より高精度なモードを使用するかどうか",
     )
     args = parser.parse_args()
 
@@ -181,6 +234,7 @@ def main():
             beam_size=args.beam_size,
             model_name=args.model,
             output_mask=args.output_mask,
+            high_quality=args.high_quality,
         )
 
     if args.shutdown:
