@@ -4,6 +4,8 @@ import json
 import os
 import re
 
+import librosa
+import numpy as np
 import torch
 import whisper
 
@@ -24,8 +26,193 @@ def secondtotime(time):
     return f"{sh}:{sm}:{ss}.{mm}"
 
 
+def get_audio_duration(filename):
+    """
+    音声ファイルの長さを取得する関数
+    """
+    try:
+        duration = librosa.get_duration(path=filename)
+        return duration
+    except Exception as e:
+        print(f"音声ファイルの長さ取得に失敗しました: {e}")
+        return None
+
+
+def find_silence_segments(
+    audio_path, segment_duration=1800, silence_threshold=-40, min_silence_duration=2.0
+):
+    """
+    音声ファイルを読み込んで、指定された長さのセグメントに分割するための
+    無音区間の位置を検出する関数
+
+    Args:
+        audio_path: 音声ファイルのパス
+        segment_duration: 目標セグメント長（秒、デフォルト30分=1800秒）
+        silence_threshold: 無音判定の閾値（dB）
+        min_silence_duration: 最小無音区間長（秒）
+
+    Returns:
+        segments: [(start_time, end_time), ...] のリスト
+    """
+    print(f"音声ファイルを分析中: {audio_path}")
+
+    # 音声ファイルを読み込み
+    y, sr = librosa.load(audio_path, sr=None)
+
+    # 音声の長さを取得
+    total_duration = len(y) / sr
+    print(f"総再生時間: {total_duration:.1f}秒 ({total_duration / 60:.1f}分)")
+
+    # 音声レベルを計算
+    hop_length = 512
+    frame_length = 2048
+
+    # RMS（二乗平均平方根）を計算して音量レベルを取得
+    rms = librosa.feature.rms(y=y, frame_length=frame_length, hop_length=hop_length)[0]
+
+    # dBに変換
+    db = 20 * np.log10(rms + 1e-10)
+
+    # 無音判定
+    silence_mask = db < silence_threshold
+
+    # 無音区間の開始・終了位置を検出
+    silence_starts = []
+    silence_ends = []
+
+    for i in range(1, len(silence_mask)):
+        if silence_mask[i] and not silence_mask[i - 1]:  # 無音開始
+            silence_starts.append(i)
+        elif not silence_mask[i] and silence_mask[i - 1]:  # 無音終了
+            silence_ends.append(i)
+
+    # 最初と最後の処理
+    if silence_mask[0]:
+        silence_starts.insert(0, 0)
+    if silence_mask[-1]:
+        silence_ends.append(len(silence_mask))
+
+    # 無音区間の長さを計算
+    silence_segments = []
+    for start, end in zip(silence_starts, silence_ends):
+        start_time = start * hop_length / sr
+        end_time = end * hop_length / sr
+        duration = end_time - start_time
+
+        if duration >= min_silence_duration:
+            silence_segments.append((start_time, end_time))
+
+    print(f"検出された無音区間数: {len(silence_segments)}")
+
+    # セグメント分割点を決定
+    segments = []
+    current_start = 0.0
+
+    for silence_start, silence_end in silence_segments:
+        silence_center = (silence_start + silence_end) / 2
+
+        # 現在位置から目標セグメント長を超えた場合、最も近い無音区間で分割
+        if silence_center - current_start >= segment_duration:
+            segments.append((current_start, silence_center))
+            current_start = silence_center
+
+    # 最後のセグメントを追加
+    if current_start < total_duration:
+        segments.append((current_start, total_duration))
+
+    # セグメントが長すぎる場合は強制的に分割
+    final_segments = []
+    for start, end in segments:
+        if end - start > segment_duration * 1.5:  # 45分を超える場合
+            # 強制的に30分ずつに分割
+            current = start
+            while current < end:
+                segment_end = min(current + segment_duration, end)
+                final_segments.append((current, segment_end))
+                current = segment_end
+        else:
+            final_segments.append((start, end))
+
+    print(f"分割セグメント数: {len(final_segments)}")
+    for i, (start, end) in enumerate(final_segments):
+        print(
+            f"  セグメント {i + 1}: {start:.1f}s - {end:.1f}s ({(end - start) / 60:.1f}分)"
+        )
+
+    return final_segments
+
+
+def transcribe_segment(
+    model,
+    audio_path,
+    start_time,
+    end_time,
+    segment_index,
+    total_segments,
+    beam_size=5,
+    high_quality=False,
+):
+    """
+    音声ファイルの特定セグメントを文字起こしする関数
+    """
+    print(
+        f"\nセグメント {segment_index}/{total_segments} を処理中: {start_time:.1f}s - {end_time:.1f}s"
+    )
+
+    transcribe_options = {
+        "verbose": False,  # セグメント処理時は詳細ログを無効化
+        "language": "japanese",
+        "beam_size": beam_size,
+        "clip_timestamps": f"{start_time},{end_time}",
+    }
+
+    # 高精度モードの場合、追加パラメータを設定
+    if high_quality:
+        transcribe_options.update(
+            {
+                "condition_on_previous_text": True,
+                "temperature": 0,
+                "compression_ratio_threshold": 2.4,
+                "no_speech_threshold": 0.6,
+            }
+        )
+
+    # 推論時は勾配計算を無効化してメモリ使用量・計算量を削減
+    with torch.no_grad():
+        result = model.transcribe(audio_path, **transcribe_options)
+
+    # セグメントのタイムスタンプを調整
+    for segment in result["segments"]:
+        segment["start"] += start_time
+        segment["end"] += start_time
+
+    return result
+
+
+def merge_results(results_list):
+    """
+    複数の文字起こし結果を統合する関数
+    """
+    merged_result = {"text": "", "segments": [], "language": "japanese"}
+
+    for result in results_list:
+        merged_result["text"] += result["text"] + " "
+        merged_result["segments"].extend(result["segments"])
+
+    # セグメントを開始時間でソート
+    merged_result["segments"].sort(key=lambda x: x["start"])
+
+    return merged_result
+
+
 def transcribe_file(
-    filename, beam_size=5, model_name="turbo", output_mask=7, high_quality=False
+    filename,
+    beam_size=5,
+    model_name="turbo",
+    output_mask=7,
+    high_quality=False,
+    auto_segment=True,
+    segment_duration=1800,
 ):
     """
     Whisperモデルを使用して音声ファイルを文字起こしし、複数のファイルに出力する関数。
@@ -75,81 +262,127 @@ def transcribe_file(
             if isinstance(m, whisper.model.LayerNorm):
                 m.float()
 
-    # ここから音声ファイルの文字起こし設定説明（日本語翻訳）
-    #
-    # model : Whisper
-    #   Whisperモデルのインスタンス
-    #
-    # audio : Union[str, np.ndarray, torch.Tensor]
-    #   音声ファイルパス、または音声波形データ
-    #
-    # verbose : bool
-    #   Trueの場合は詳細なログを表示、Falseは簡易ログ、Noneは出力なし
-    #
-    # temperature : Union[float, Tuple[float, ...]]
-    #   サンプリング時の温度。複数指定の場合、それぞれのしきい値を超えた際に段階的に適用される
-    #
-    # compression_ratio_threshold : float
-    #   この値を超えるgzip圧縮率になった場合は失敗とみなす
-    #
-    # logprob_threshold : float
-    #   平均対数確率がこの値を下回った場合は失敗とみなす
-    #
-    # no_speech_threshold : float
-    #   no_speechの確率がこの値を上回り、かつ平均対数確率が閾値を下回っている場合、
-    #   セグメントを無音とみなす
-    #
-    # condition_on_previous_text : bool
-    #   Trueのとき、前のセグメントの推定を次のセグメントの推定に反映する
-    #
-    # word_timestamps : bool
-    #   単語レベルのタイムスタンプを取得し、各セグメントに含める
-    #
-    # prepend_punctuations : str
-    #   word_timestampsがTrueの場合、指定した句読点を次の単語に結合
-    #
-    # append_punctuations : str
-    #   word_timestampsがTrueの場合、指定した句読点を前の単語に結合
-    #
-    # initial_prompt : Optional[str]
-    #   最初のセグメントに与えるテキスト。固有名詞等の補助として使用
-    #
-    # carry_initial_prompt : bool
-    #   Trueの場合、initial_promptを各内部decode()呼び出しに持ち越す
-    #   スペースが足りない場合は先頭が切り捨てられる
-    #
-    # decode_options : dict
-    #   DecodingOptionsインスタンスの生成に使用されるキーワード引数
-    #
-    # clip_timestamps : Union[str, List[float]]
-    #   秒単位の開始と終了のタイムスタンプをカンマ区切りで指定。最後の終了時刻はデフォルトでファイル終端
-    #
-    # hallucination_silence_threshold : Optional[float]
-    #   word_timestampsがTrueのとき、誤判定（幻覚）を避けるため特定秒数以上の無音区間を処理から除外
-    #
-    # 戻り値:
-    #   結果のテキスト("text")、セグメント単位の詳細("segments")、自動検出された言語("language")を含む辞書
-    #
-    transcribe_options = {
-        "verbose": True,
-        "language": "japanese",
-        "beam_size": beam_size,
-    }
+    # 音声ファイルの長さをチェック
+    audio_duration = get_audio_duration(filename)
+    if audio_duration is None:
+        print("音声ファイルの長さ取得に失敗しました。通常の処理を続行します。")
+        use_segmentation = False
+    else:
+        print(
+            f"音声ファイルの長さ: {audio_duration:.1f}秒 ({audio_duration / 60:.1f}分)"
+        )
+        # 30分（1800秒）以上の場合、自動セグメント分割を使用
+        use_segmentation = auto_segment and audio_duration > segment_duration
 
-    # 高精度モードの場合、追加パラメータを設定
-    if high_quality:
-        transcribe_options.update(
-            {
-                "condition_on_previous_text": True,
-                "temperature": 0,
-                "compression_ratio_threshold": 2.4,
-                "no_speech_threshold": 0.6,
-            }
+    if use_segmentation:
+        print(
+            f"長時間音声ファイルのため、{segment_duration / 60:.0f}分単位でセグメント分割して処理します。"
         )
 
-    # 推論時は勾配計算を無効化してメモリ使用量・計算量を削減
-    with torch.no_grad():
-        result = model.transcribe(filename, **transcribe_options)
+        # 音声ファイルをセグメントに分割
+        segments = find_silence_segments(filename, segment_duration=segment_duration)
+
+        if len(segments) <= 1:
+            print("セグメント分割が不要なため、通常の処理を続行します。")
+            use_segmentation = False
+        else:
+            # 各セグメントを個別に処理
+            results_list = []
+            for i, (start_time, end_time) in enumerate(segments):
+                result = transcribe_segment(
+                    model,
+                    filename,
+                    start_time,
+                    end_time,
+                    i + 1,
+                    len(segments),
+                    beam_size,
+                    high_quality,
+                )
+                results_list.append(result)
+
+            # 結果を統合
+            print("セグメント結果を統合中...")
+            result = merge_results(results_list)
+            print("統合完了")
+
+    if not use_segmentation:
+        # 通常の処理（元のコード）
+        # ここから音声ファイルの文字起こし設定説明（日本語翻訳）
+        #
+        # model : Whisper
+        #   Whisperモデルのインスタンス
+        #
+        # audio : Union[str, np.ndarray, torch.Tensor]
+        #   音声ファイルパス、または音声波形データ
+        #
+        # verbose : bool
+        #   Trueの場合は詳細なログを表示、Falseは簡易ログ、Noneは出力なし
+        #
+        # temperature : Union[float, Tuple[float, ...]]
+        #   サンプリング時の温度。複数指定の場合、それぞれのしきい値を超えた際に段階的に適用される
+        #
+        # compression_ratio_threshold : float
+        #   この値を超えるgzip圧縮率になった場合は失敗とみなす
+        #
+        # logprob_threshold : float
+        #   平均対数確率がこの値を下回った場合は失敗とみなす
+        #
+        # no_speech_threshold : float
+        #   no_speechの確率がこの値を上回り、かつ平均対数確率が閾値を下回っている場合、
+        #   セグメントを無音とみなす
+        #
+        # condition_on_previous_text : bool
+        #   Trueのとき、前のセグメントの推定を次のセグメントの推定に反映する
+        #
+        # word_timestamps : bool
+        #   単語レベルのタイムスタンプを取得し、各セグメントに含める
+        #
+        # prepend_punctuations : str
+        #   word_timestampsがTrueの場合、指定した句読点を次の単語に結合
+        #
+        # append_punctuations : str
+        #   word_timestampsがTrueの場合、指定した句読点を前の単語に結合
+        #
+        # initial_prompt : Optional[str]
+        #   最初のセグメントに与えるテキスト。固有名詞等の補助として使用
+        #
+        # carry_initial_prompt : bool
+        #   Trueの場合、initial_promptを各内部decode()呼び出しに持ち越す
+        #   スペースが足りない場合は先頭が切り捨てられる
+        #
+        # decode_options : dict
+        #   DecodingOptionsインスタンスの生成に使用されるキーワード引数
+        #
+        # clip_timestamps : Union[str, List[float]]
+        #   秒単位の開始と終了のタイムスタンプをカンマ区切りで指定。最後の終了時刻はデフォルトでファイル終端
+        #
+        # hallucination_silence_threshold : Optional[float]
+        #   word_timestampsがTrueのとき、誤判定（幻覚）を避けるため特定秒数以上の無音区間を処理から除外
+        #
+        # 戻り値:
+        #   結果のテキスト("text")、セグメント単位の詳細("segments")、自動検出された言語("language")を含む辞書
+        #
+        transcribe_options = {
+            "verbose": True,
+            "language": "japanese",
+            "beam_size": beam_size,
+        }
+
+        # 高精度モードの場合、追加パラメータを設定
+        if high_quality:
+            transcribe_options.update(
+                {
+                    "condition_on_previous_text": True,
+                    "temperature": 0,
+                    "compression_ratio_threshold": 2.4,
+                    "no_speech_threshold": 0.6,
+                }
+            )
+
+        # 推論時は勾配計算を無効化してメモリ使用量・計算量を削減
+        with torch.no_grad():
+            result = model.transcribe(filename, **transcribe_options)
 
     # 出力用のフォルダを作成
     folder_name = os.path.splitext(filename)[0]
@@ -251,6 +484,17 @@ def main():
         action="store_true",
         help="より高精度なモードを使用するかどうか",
     )
+    parser.add_argument(
+        "--no_auto_segment",
+        action="store_true",
+        help="長時間音声ファイルの自動セグメント分割を無効にする",
+    )
+    parser.add_argument(
+        "--segment_duration",
+        type=int,
+        default=1800,
+        help="セグメント分割時の目標長（秒、デフォルト30分=1800秒）",
+    )
     args = parser.parse_args()
 
     for file in args.input:
@@ -260,6 +504,8 @@ def main():
             model_name=args.model,
             output_mask=args.output_mask,
             high_quality=args.high_quality,
+            auto_segment=not args.no_auto_segment,
+            segment_duration=args.segment_duration,
         )
 
     if args.shutdown:
