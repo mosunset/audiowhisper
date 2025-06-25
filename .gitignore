@@ -30,6 +30,12 @@
 *.wmv
 *.webm
 
+### Text ###
+*.txt
+*.srt
+*.time.txt
+
+
 # General
 .DS_Store
 .AppleDouble
