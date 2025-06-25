@@ -23,7 +23,9 @@ def secondtotime(time):
     return f"{sh}:{sm}:{ss}.{mm}"
 
 
-def transcribe_file(filename, beam_size=5, model_name="turbo", output_mask=7, high_quality=False):
+def transcribe_file(
+    filename, beam_size=5, model_name="turbo", output_mask=7, high_quality=False
+):
     """
     Whisperモデルを使用して音声ファイルを文字起こしし、複数のファイルに出力する関数。
 
@@ -40,7 +42,9 @@ def transcribe_file(filename, beam_size=5, model_name="turbo", output_mask=7, hi
             model_name = "large"
         beam_size = max(beam_size, 6)
 
-    print(f"Transcribing: {filename} --beam_size {beam_size} --model {model_name}{quality_str}")
+    print(
+        f"Transcribing: {filename} --beam_size {beam_size} --model {model_name}{quality_str}"
+    )
 
     # Whisperモデルを読み込む
     # whisper.load_model(モデルサイズ, device=デバイス)
@@ -127,12 +131,14 @@ def transcribe_file(filename, beam_size=5, model_name="turbo", output_mask=7, hi
 
     # 高精度モードの場合、追加パラメータを設定
     if high_quality:
-        transcribe_options.update({
-            "condition_on_previous_text": True,
-            "temperature": 0,
-            "compression_ratio_threshold": 2.4,
-            "no_speech_threshold": 0.6,
-        })
+        transcribe_options.update(
+            {
+                "condition_on_previous_text": True,
+                "temperature": 0,
+                "compression_ratio_threshold": 2.4,
+                "no_speech_threshold": 0.6,
+            }
+        )
 
     # 推論時は勾配計算を無効化してメモリ使用量・計算量を削減
     with torch.no_grad():
@@ -144,7 +150,9 @@ def transcribe_file(filename, beam_size=5, model_name="turbo", output_mask=7, hi
 
     # <filename>.time.txt（タイムスタンプ付きテキスト出力）
     if output_mask & 1:
-        time_txt_filename = os.path.join(folder_name, f"{os.path.basename(filename)}.time.txt")
+        time_txt_filename = os.path.join(
+            folder_name, f"{os.path.basename(filename)}.time.txt"
+        )
         with open(time_txt_filename, "w", encoding="UTF-8") as f:
             count = 0
             temp = -1
@@ -155,7 +163,13 @@ def transcribe_file(filename, beam_size=5, model_name="turbo", output_mask=7, hi
                 if temp == start_formatted:
                     f.write("\n")
                 else:
-                    f.write(("" if count == 1 else "\n\n") + start_formatted + " " + str(count) + "\n")
+                    f.write(
+                        ("" if count == 1 else "\n\n")
+                        + start_formatted
+                        + " "
+                        + str(count)
+                        + "\n"
+                    )
                 temp = end_formatted
                 f.write(json.dumps(s["text"], ensure_ascii=False).replace('"', ""))
         print(f"Created {time_txt_filename}")
@@ -167,7 +181,9 @@ def transcribe_file(filename, beam_size=5, model_name="turbo", output_mask=7, hi
             count = 0
             for s in result["segments"]:
                 count += 1
-                replaced_text3 = json.dumps(s["text"], ensure_ascii=False).replace('"', "")
+                replaced_text3 = json.dumps(s["text"], ensure_ascii=False).replace(
+                    '"', ""
+                )
                 f.write(
                     f"{count}\n"
                     f"{secondtotime(s['start'])} --> {secondtotime(s['end'])}\n"
@@ -180,7 +196,9 @@ def transcribe_file(filename, beam_size=5, model_name="turbo", output_mask=7, hi
         txt_filename = os.path.join(folder_name, f"{os.path.basename(filename)}.txt")
         document = ""
         for s in result["segments"]:
-            document += (json.dumps(s["text"], ensure_ascii=False).replace('"', "") + "。")
+            document += (
+                json.dumps(s["text"], ensure_ascii=False).replace('"', "") + "。"
+            )
         with open(txt_filename, "w", encoding="UTF-8") as f:
             f.write(document)
         print(f"Created {txt_filename}")
