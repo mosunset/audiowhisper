@@ -1,10 +1,11 @@
 #!/usr/bin/env python
-import whisper
-import torch
-import json
-import re
 import argparse
+import json
 import os
+import re
+
+import torch
+import whisper
 
 
 def secondtotime(time):
@@ -46,6 +47,10 @@ def transcribe_file(
         f"Transcribing: {filename} --beam_size {beam_size} --model {model_name}{quality_str}"
     )
 
+    # CUDAの利用可能性をチェック
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
+
     # Whisperモデルを読み込む
     # whisper.load_model(モデルサイズ, device=デバイス)
     # | モデルサイズ | パラメータ数  | 必要VRAM  | 相対速度  |
@@ -55,18 +60,20 @@ def transcribe_file(
     # | medium      | 769M        | ~5GB     | ~2x      |
     # | large       | 1550M       | ~10GB    | 1x       |
     # | turbo       | 809M        | ~6GB     | ~8x      |
-    model = whisper.load_model(model_name, device="cpu")
+    model = whisper.load_model(model_name, device=device)
 
-    # モデルのパラメータを半精度へ変換する（GPU推論時に性能向上が見込まれる）
-    _ = model.half()
+    # GPUが利用可能な場合のみ半精度変換とLayerNorm調整を実行
+    if device == "cuda":
+        # モデルのパラメータを半精度へ変換する（GPU推論時に性能向上が見込まれる）
+        _ = model.half()
 
-    # モデルをGPUに移動（GPUが使用可能なら推論速度が大幅に上昇）
-    _ = model.cuda()
+        # モデルをGPUに移動（GPUが使用可能なら推論速度が大幅に上昇）
+        _ = model.cuda()
 
-    # LayerNormレイヤーはfloat16で精度が下がりやすいため、float32に戻す
-    for m in model.modules():
-        if isinstance(m, whisper.model.LayerNorm):
-            m.float()
+        # LayerNormレイヤーはfloat16で精度が下がりやすいため、float32に戻す
+        for m in model.modules():
+            if isinstance(m, whisper.model.LayerNorm):
+                m.float()
 
     # ここから音声ファイルの文字起こし設定説明（日本語翻訳）
     #
