@@ -4,6 +4,12 @@ audiowhisper - OpenAI Whisperを使用した高精度音声文字起こしツー
 """
 
 from .audio_utils import find_silence_segments, get_audio_duration
+from .file_manager import (
+    create_output_folders,
+    get_input_files,
+    move_processed_file,
+    process_input_folder,
+)
 from .transcription import transcribe_file
 from .utils import secondtotime
 
@@ -16,4 +22,8 @@ __all__ = [
     "get_audio_duration",
     "find_silence_segments",
     "secondtotime",
+    "process_input_folder",
+    "get_input_files",
+    "move_processed_file",
+    "create_output_folders",
 ]

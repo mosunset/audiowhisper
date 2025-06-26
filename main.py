@@ -6,6 +6,7 @@ audiowhisper - メインエントリーポイント
 import argparse
 import os
 
+from src.file_manager import create_output_folders, process_input_folder
 from src.transcription import transcribe_file
 
 
@@ -18,8 +19,22 @@ def main():
         "-i",
         "--input",
         nargs="+",
-        required=True,
         help="入力する音声ファイルのパス。複数指定可。",
+    )
+    parser.add_argument(
+        "--batch",
+        action="store_true",
+        help="inputフォルダ内のファイルを連続処理する",
+    )
+    parser.add_argument(
+        "--input_dir",
+        default="input",
+        help="inputフォルダのパス（--batchオプション使用時）",
+    )
+    parser.add_argument(
+        "--output_dir",
+        default="output",
+        help="出力先フォルダ（--batchオプション使用時）",
     )
     parser.add_argument(
         "--beam_size",
@@ -60,18 +75,45 @@ def main():
         default=1800,
         help="セグメント分割時の目標長（秒、デフォルト30分=1800秒）",
     )
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="必要なフォルダ（input, output）を作成する",
+    )
     args = parser.parse_args()
 
-    for file in args.input:
-        transcribe_file(
-            file,
-            beam_size=args.beam_size,
-            model_name=args.model,
-            output_mask=args.output_mask,
-            high_quality=args.high_quality,
-            auto_segment=not args.no_auto_segment,
-            segment_duration=args.segment_duration,
+    # セットアップモード
+    if args.setup:
+        create_output_folders()
+        return
+
+    # バッチ処理モード
+    if args.batch:
+        transcribe_kwargs = {
+            "beam_size": args.beam_size,
+            "model_name": args.model,
+            "output_mask": args.output_mask,
+            "high_quality": args.high_quality,
+            "auto_segment": not args.no_auto_segment,
+            "segment_duration": args.segment_duration,
+        }
+        process_input_folder(
+            input_dir=args.input_dir, output_dir=args.output_dir, **transcribe_kwargs
         )
+    # 個別ファイル処理モード
+    elif args.input:
+        for file in args.input:
+            transcribe_file(
+                file,
+                beam_size=args.beam_size,
+                model_name=args.model,
+                output_mask=args.output_mask,
+                high_quality=args.high_quality,
+                auto_segment=not args.no_auto_segment,
+                segment_duration=args.segment_duration,
+            )
+    else:
+        parser.error("--input または --batch のいずれかを指定してください。")
 
     if args.shutdown:
         print("10秒後にシャットダウンします")
