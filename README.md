@@ -296,10 +296,6 @@ uv add --dev pytest
 uv lock --upgrade
 ```
 
-## ライセンス
-
-このプロジェクトはMITライセンスの下で公開されています。
-
 ## 貢献
 
 バグ報告や機能要望は、GitHubのIssuesページでお知らせください。

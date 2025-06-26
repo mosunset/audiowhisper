@@ -112,6 +112,7 @@ def transcribe_file(
     high_quality=False,
     auto_segment=True,
     segment_duration=1800,
+    output_dir="output",
 ):
     """
     Whisperモデルを使用して音声ファイルを文字起こしし、複数のファイルに出力する関数。
@@ -263,4 +264,4 @@ def transcribe_file(
             result = model.transcribe(filename, **transcribe_options)
 
     # 出力ファイルを作成
-    write_output_files(result, filename, output_mask)
+    write_output_files(result, filename, output_mask, output_dir)

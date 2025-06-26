@@ -10,12 +10,12 @@ import re
 from .utils import secondtotime
 
 
-def write_time_txt(result, folder_name, filename):
+def write_time_txt(result, output_folder, filename):
     """
     <filename>.time.txt（タイムスタンプ付きテキスト出力）
     """
     time_txt_filename = os.path.join(
-        folder_name, f"{os.path.basename(filename)}.time.txt"
+        output_folder, f"{os.path.basename(filename)}.time.txt"
     )
     with open(time_txt_filename, "w", encoding="UTF-8") as f:
         count = 0
@@ -39,11 +39,11 @@ def write_time_txt(result, folder_name, filename):
     print(f"Created {time_txt_filename}")
 
 
-def write_srt(result, folder_name, filename):
+def write_srt(result, output_folder, filename):
     """
     <filename>.srt（SRT形式字幕ファイル）
     """
-    srt_filename = os.path.join(folder_name, f"{os.path.basename(filename)}.srt")
+    srt_filename = os.path.join(output_folder, f"{os.path.basename(filename)}.srt")
     with open(srt_filename, "w", encoding="UTF-8") as f:
         count = 0
         for s in result["segments"]:
@@ -57,11 +57,11 @@ def write_srt(result, folder_name, filename):
     print(f"Created {srt_filename}")
 
 
-def write_txt(result, folder_name, filename):
+def write_txt(result, output_folder, filename):
     """
     <filename>.txt（全文テキスト）
     """
-    txt_filename = os.path.join(folder_name, f"{os.path.basename(filename)}.txt")
+    txt_filename = os.path.join(output_folder, f"{os.path.basename(filename)}.txt")
     document = ""
     for s in result["segments"]:
         document += json.dumps(s["text"], ensure_ascii=False).replace('"', "") + "。"
@@ -70,22 +70,25 @@ def write_txt(result, folder_name, filename):
     print(f"Created {txt_filename}")
 
 
-def write_output_files(result, filename, output_mask):
+def write_output_files(result, filename, output_mask, output_dir="output"):
     """
     指定されたマスクに基づいて出力ファイルを作成
     """
-    # 出力用のフォルダを作成
-    folder_name = os.path.splitext(filename)[0]
-    os.makedirs(folder_name, exist_ok=True)
+    # ファイル名を取得（拡張子なし）
+    filename_without_ext = os.path.splitext(os.path.basename(filename))[0]
+
+    # output/<ファイル名>/フォルダを作成
+    output_folder = os.path.join(output_dir, filename_without_ext)
+    os.makedirs(output_folder, exist_ok=True)
 
     # <filename>.time.txt（タイムスタンプ付きテキスト出力）
     if output_mask & 1:
-        write_time_txt(result, folder_name, filename)
+        write_time_txt(result, output_folder, filename)
 
     # <filename>.srt（SRT形式字幕ファイル）
     if output_mask & 2:
-        write_srt(result, folder_name, filename)
+        write_srt(result, output_folder, filename)
 
     # <filename>.txt（全文テキスト）
     if output_mask & 4:
-        write_txt(result, folder_name, filename)
+        write_txt(result, output_folder, filename)

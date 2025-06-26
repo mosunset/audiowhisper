@@ -119,7 +119,7 @@ def process_input_folder(input_dir="input", output_dir="output", **transcribe_kw
 
         try:
             # 文字起こし処理
-            transcribe_file(file_path, **transcribe_kwargs)
+            transcribe_file(file_path, output_dir=output_dir, **transcribe_kwargs)
 
             # 処理が成功したらファイルを移動
             if move_processed_file(file_path, output_dir):
@@ -147,3 +147,59 @@ def create_output_folders():
             print(f"フォルダを作成しました: {folder}")
         else:
             print(f"フォルダが既に存在します: {folder}")
+
+
+def move_transcription_files(input_dir="input", output_dir="output"):
+    """
+    既存の文字起こしファイルをinputフォルダからoutputフォルダに移動する関数
+    """
+    # 対応する文字起こしファイルの拡張子
+    transcription_extensions = ["*.txt", "*.srt", "*.time.txt"]
+
+    # inputフォルダ内のサブフォルダを取得
+    input_subdirs = [
+        d for d in os.listdir(input_dir) if os.path.isdir(os.path.join(input_dir, d))
+    ]
+
+    moved_count = 0
+
+    for subdir in input_subdirs:
+        input_subdir_path = os.path.join(input_dir, subdir)
+        output_subdir_path = os.path.join(output_dir, subdir)
+
+        # outputサブフォルダが存在しない場合は作成
+        if not os.path.exists(output_subdir_path):
+            os.makedirs(output_subdir_path)
+
+        # 各拡張子の文字起こしファイルを検索
+        for extension in transcription_extensions:
+            pattern = os.path.join(input_subdir_path, extension)
+            files = glob.glob(pattern)
+
+            for file_path in files:
+                filename = os.path.basename(file_path)
+                destination = os.path.join(output_subdir_path, filename)
+
+                # 同名ファイルが存在する場合の処理
+                counter = 1
+                original_destination = destination
+                while os.path.exists(destination):
+                    name, ext = os.path.splitext(filename)
+                    destination = os.path.join(
+                        output_subdir_path, f"{name}_{counter}{ext}"
+                    )
+                    counter += 1
+
+                try:
+                    shutil.move(file_path, destination)
+                    print(
+                        f"文字起こしファイルを移動: {filename} -> {output_subdir_path}/"
+                    )
+                    moved_count += 1
+                except Exception as e:
+                    print(f"ファイル移動に失敗しました: {file_path} - {e}")
+
+    if moved_count > 0:
+        print(f"\n合計 {moved_count} 個の文字起こしファイルを移動しました。")
+    else:
+        print("移動する文字起こしファイルが見つかりませんでした。")

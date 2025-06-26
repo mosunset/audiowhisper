@@ -6,7 +6,11 @@ audiowhisper - メインエントリーポイント
 import argparse
 import os
 
-from src.file_manager import create_output_folders, process_input_folder
+from src.file_manager import (
+    create_output_folders,
+    move_transcription_files,
+    process_input_folder,
+)
 from src.transcription import transcribe_file
 
 
@@ -80,11 +84,21 @@ def main():
         action="store_true",
         help="必要なフォルダ（input, output）を作成する",
     )
+    parser.add_argument(
+        "--move_transcriptions",
+        action="store_true",
+        help="既存の文字起こしファイルをinputフォルダからoutputフォルダに移動する",
+    )
     args = parser.parse_args()
 
     # セットアップモード
     if args.setup:
         create_output_folders()
+        return
+
+    # 文字起こしファイル移動モード
+    if args.move_transcriptions:
+        move_transcription_files(input_dir=args.input_dir, output_dir=args.output_dir)
         return
 
     # バッチ処理モード
@@ -111,6 +125,7 @@ def main():
                 high_quality=args.high_quality,
                 auto_segment=not args.no_auto_segment,
                 segment_duration=args.segment_duration,
+                output_dir=args.output_dir,
             )
     else:
         parser.error("--input または --batch のいずれかを指定してください。")
